@@ -9,6 +9,18 @@ end, {
   desc = "Open shunpo instance list",
 })
 
+vim.api.nvim_create_user_command("ShunpoNext", function()
+  require("shunpo").next()
+end, {
+  desc = "Swap UI to the next instance",
+})
+
+vim.api.nvim_create_user_command("ShunpoPrev", function()
+  require("shunpo").prev()
+end, {
+  desc = "Swap UI to the previous instance",
+})
+
 local group = vim.api.nvim_create_augroup("ShunpoRegistry", { clear = true })
 
 vim.api.nvim_create_autocmd("VimEnter", {

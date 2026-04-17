@@ -13,6 +13,9 @@ local M = {}
 ---@field include_self boolean
 ---@field fetch_meta boolean
 ---@field prune_on_open boolean
+---@field detached_only boolean
+---@field autorefresh boolean
+---@field autorefresh_period number
 
 ---@class ShunpoSwapConfig
 ---@field kill_on_no_ui boolean
@@ -21,7 +24,9 @@ local M = {}
 ---@field swap string
 ---@field detach_self string
 ---@field kill_remote string
+---@field rename string
 ---@field refresh string
+---@field restart string
 ---@field close string[]
 
 ---@class ShunpoAutocmdsConfig
@@ -38,7 +43,7 @@ local M = {}
 
 M.defaults = {
   window = {
-    width = 0.6,
+    width = 0.5,
     height = 0.5,
     border = "rounded",
     title = " shunpo ",
@@ -50,6 +55,10 @@ M.defaults = {
     include_self = false,
     fetch_meta = true,
     prune_on_open = true,
+    -- Show detached (headless/background) instances only.
+    -- detached_only = false,
+    autorefresh = true,
+    autorefresh_period = 3000,
   },
   swap = {
     kill_on_no_ui = false,
@@ -58,8 +67,15 @@ M.defaults = {
     swap = "<CR>",
     detach_self = "d",
     kill_remote = "x",
+    rename = "i",
     refresh = "r",
+    -- :restart on the instance
+    restart = "R",
     close = { "q", "<Esc>" },
+    -- Go to next instance
+    next = {},
+    -- Go to prev instance
+    prev = {},
   },
   autocmds = {
     register_on_vimenter = true,
