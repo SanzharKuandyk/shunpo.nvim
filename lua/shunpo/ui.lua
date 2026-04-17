@@ -250,13 +250,9 @@ local function set_keymaps(cfg)
   end
 end
 
-function M.open()
-  local cfg = config.get()
-  local prev_cursor = (state.win and vim.api.nvim_win_is_valid(state.win))
-      and vim.api.nvim_win_get_cursor(state.win)
-    or nil
-  close()
-
+---@param cfg ShunpoConfig
+---@return table[], number
+local function collect_entries(cfg)
   local self_pid = vim.fn.getpid()
   local entries = registry.scan()
 
@@ -284,7 +280,7 @@ function M.open()
     entries = filtered
   end
 
-  local self_idx = nil
+  local self_idx
   for i, e in ipairs(entries) do
     if e.pid == self_pid then
       self_idx = i
@@ -294,8 +290,8 @@ function M.open()
   if self_idx and self_idx ~= 1 then
     local s = table.remove(entries, self_idx)
     table.insert(entries, 1, s)
+    self_idx = 1
   end
-  state.self_row = (self_idx and 3) or nil
 
   if cfg.list.fetch_meta then
     for _, entry in ipairs(entries) do
@@ -303,46 +299,116 @@ function M.open()
     end
   end
 
-  local ui_list = vim.api.nvim_list_uis()
-  local ui_info = ui_list[1] or { width = 80, height = 24 }
-  local width = math.floor(ui_info.width * cfg.window.width)
-  local lines = render(entries, width)
-  local max_height = math.floor(ui_info.height * cfg.window.height)
-  local height = math.max(math.min(#lines, max_height), 3)
-  local row = math.floor((ui_info.height - height) / 2)
-  local col = math.floor((ui_info.width - width) / 2)
+  return entries, (self_idx and 3) or nil
+end
 
-  state.buf = vim.api.nvim_create_buf(false, true)
+---@param entries table[]
+---@param self_row number?
+---@param width number
+local function write_buf(entries, self_row, width)
+  local lines = render(entries, width)
+  vim.api.nvim_set_option_value("modifiable", true, { buf = state.buf })
   vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  if state.self_row then
-    vim.api.nvim_buf_set_extmark(state.buf, ns, state.self_row - 1, 0, {
+  vim.api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
+  if self_row then
+    vim.api.nvim_buf_set_extmark(state.buf, ns, self_row - 1, 0, {
       line_hl_group = "ShunpoSelf",
     })
   end
   vim.api.nvim_set_option_value("modifiable", false, { buf = state.buf })
+  state.self_row = self_row
+  return lines
+end
+
+---@param cfg ShunpoConfig
+---@param line_count number
+---@return table
+local function compute_dims(cfg, line_count)
+  local ui_list = vim.api.nvim_list_uis()
+  local ui_info = ui_list[1] or { width = 80, height = 24 }
+  local width = math.max(math.floor(ui_info.width * cfg.window.width), 40)
+  local max_height = math.floor(ui_info.height * cfg.window.height)
+  local height = math.max(math.min(line_count, max_height), 3)
+  return {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.floor((ui_info.height - height) / 2),
+    col = math.floor((ui_info.width - width) / 2),
+  }
+end
+
+---Refresh contents in place. Recomputes size so resized terminals stay correct.
+---@param force boolean? skip normal-mode check when true (manual refresh)
+local function refresh(force)
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) then
+    stop_timer()
+    return
+  end
+  if not force and vim.api.nvim_get_mode().mode ~= "n" then
+    return
+  end
+
+  local cfg = config.get()
+  local entries, self_row = collect_entries(cfg)
+  local probe = render(entries, 1)
+  local dims = compute_dims(cfg, #probe)
+
+  vim.api.nvim_win_set_config(state.win, {
+    relative = dims.relative,
+    width = dims.width,
+    height = dims.height,
+    row = dims.row,
+    col = dims.col,
+  })
+
+  write_buf(entries, self_row, dims.width)
+end
+
+function M.open()
+  local cfg = config.get()
+
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    refresh(true)
+    vim.api.nvim_set_current_win(state.win)
+    return
+  end
+
+  close()
+
+  local entries, self_row = collect_entries(cfg)
+  local probe = render(entries, 1)
+  local dims = compute_dims(cfg, #probe)
+
+  state.buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = state.buf })
   vim.api.nvim_set_option_value("filetype", "shunpo", { buf = state.buf })
 
   state.win = vim.api.nvim_open_win(state.buf, true, {
-    relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
+    relative = dims.relative,
+    width = dims.width,
+    height = dims.height,
+    row = dims.row,
+    col = dims.col,
     border = cfg.window.border,
     title = cfg.window.title,
     title_pos = "center",
     style = "minimal",
   })
 
+  write_buf(entries, self_row, dims.width)
   vim.api.nvim_set_option_value("cursorline", true, { win = state.win })
 
-  local total_rows = #lines
   local start_row = #entries > 0 and 3 or 1
-  if prev_cursor then
-    start_row = math.min(math.max(prev_cursor[1], start_row), total_rows)
-  end
   vim.api.nvim_win_set_cursor(state.win, { start_row, 0 })
+
+  local aug = vim.api.nvim_create_augroup("ShunpoUI", { clear = true })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = aug,
+    callback = function()
+      refresh(true)
+    end,
+  })
 
   set_keymaps(cfg)
 
@@ -352,11 +418,7 @@ function M.open()
       cfg.list.autorefresh_period,
       cfg.list.autorefresh_period,
       vim.schedule_wrap(function()
-        if state.win and vim.api.nvim_win_is_valid(state.win) then
-          M.open()
-        else
-          stop_timer()
-        end
+        refresh(false)
       end)
     )
   end

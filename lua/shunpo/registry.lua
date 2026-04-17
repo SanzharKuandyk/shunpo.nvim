@@ -25,8 +25,8 @@ function M.self_path()
 end
 
 ---@param path string
----@return string?
-local function read_existing_name(path)
+---@return table?
+local function read_entry(path)
   if not vim.uv.fs_stat(path) then
     return nil
   end
@@ -35,13 +35,8 @@ local function read_existing_name(path)
     return nil
   end
   local ok, existing = pcall(vim.json.decode, table.concat(lines, ""))
-  if
-    ok
-    and type(existing) == "table"
-    and type(existing.name) == "string"
-    and existing.name ~= ""
-  then
-    return existing.name
+  if ok and type(existing) == "table" then
+    return existing
   end
   return nil
 end
@@ -56,7 +51,7 @@ local function atomic_write(path, entry)
   vim.uv.fs_rename(tmp, path)
 end
 
----@return string?
+---@return table?
 local function consume_restart_handoff()
   local raw = vim.env.SHUNPO_RESTART_FROM
   vim.env.SHUNPO_RESTART_FROM = nil
@@ -65,9 +60,9 @@ local function consume_restart_handoff()
     return nil
   end
   local old_path = M.dir() .. "/" .. old_pid .. ".json"
-  local name = read_existing_name(old_path)
+  local old = read_entry(old_path)
   vim.uv.fs_unlink(old_path)
-  return name
+  return old
 end
 
 function M.write_self()
@@ -75,11 +70,23 @@ function M.write_self()
     return
   end
   local path = M.self_path()
-  local name = read_existing_name(path) or consume_restart_handoff() or vim.fn.getcwd(-1, -1)
+  local cwd = vim.fn.getcwd(-1, -1)
+  local existing = read_entry(path) or consume_restart_handoff()
+
+  local name, pinned
+  if existing and existing.name_pinned and type(existing.name) == "string" and existing.name ~= "" then
+    name = existing.name
+    pinned = true
+  else
+    name = cwd
+    pinned = false
+  end
+
   local entry = {
     pid = vim.fn.getpid(),
     servername = vim.v.servername,
     name = name,
+    name_pinned = pinned,
     argf = (vim.fn.exists("v:argf") == 1 and vim.v.argf) or {},
     start_time = start_time,
     has_ui = #vim.api.nvim_list_uis() > 0,
@@ -97,6 +104,7 @@ function M.rename(entry, name)
     return false
   end
   entry.name = name
+  entry.name_pinned = true
   local persisted = vim.deepcopy(entry)
   persisted._path = nil
   atomic_write(entry._path, persisted)
