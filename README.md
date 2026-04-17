@@ -1,4 +1,7 @@
-# shunpo.nvim
+<div align="center">
+  <h1>shunpo.nvim ⚡</h1>
+   <img src="shunpo.png" alt="Screenshot of shunpo.nvim"/>
+</div>
 
 Flash-step between running nvim instances. Detach here, reattach there.
 
