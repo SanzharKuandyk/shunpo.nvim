@@ -27,7 +27,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
   group = group,
   callback = function()
     if require("shunpo.config").get().autocmds.register_on_vimenter then
-      vim.schedule(require("shunpo.registry").write_self)
+      require("shunpo.registry").start()
     end
   end,
 })
@@ -42,7 +42,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 vim.api.nvim_create_autocmd("UIEnter", {
   group = group,
   callback = function()
-    require("shunpo.registry").write_self()
+    require("shunpo.registry").register()
   end,
 })
 

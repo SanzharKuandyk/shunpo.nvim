@@ -1,8 +1,8 @@
 local M = {}
 
 ---@class ShunpoWindowConfig
----@field width number
----@field height number
+---@field width number? Fraction of the UI width, or an absolute number of columns.
+---@field height number? Fraction of the UI height, or an absolute number of rows.
 ---@field border string
 ---@field title string
 
@@ -23,6 +23,7 @@ local M = {}
 ---@class ShunpoKeymapsConfig
 ---@field swap string
 ---@field detach_self string
+---@field detach_others string
 ---@field kill_remote string
 ---@field rename string
 ---@field refresh string
@@ -43,8 +44,9 @@ local M = {}
 
 M.defaults = {
   window = {
-    width = 0.5,
-    height = 0.5,
+    -- nil fits the rendered instance columns/rows (within the editor bounds).
+    width = nil,
+    height = nil,
     border = "rounded",
     title = " shunpo ",
   },
@@ -58,7 +60,7 @@ M.defaults = {
     -- Show detached (headless/background) instances only.
     -- detached_only = false,
     autorefresh = true,
-    autorefresh_period = 3000,
+    autorefresh_period = 500,
   },
   swap = {
     kill_on_no_ui = false,
@@ -66,6 +68,7 @@ M.defaults = {
   keymaps = {
     swap = "<CR>",
     detach_self = "d",
+    detach_others = "%d",
     kill_remote = "x",
     rename = "i",
     refresh = "r",

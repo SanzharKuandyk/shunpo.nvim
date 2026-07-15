@@ -4,6 +4,13 @@ local config = require("shunpo.config")
 local registry = require("shunpo.registry")
 local rpc = require("shunpo.rpc")
 
+---@class ShunpoUiState
+---@field buf integer?
+---@field win integer?
+---@field rows table<integer, table>
+---@field self_row integer?
+---@field timer uv.uv_timer_t?
+---@type ShunpoUiState
 local state = {
   buf = nil,
   win = nil,
@@ -14,12 +21,6 @@ local state = {
 
 local ns = vim.api.nvim_create_namespace("shunpo")
 vim.api.nvim_set_hl(0, "ShunpoSelf", { link = "Special", default = true })
-
----@param servername string
----@return string
-local function addr_tail(servername)
-  return servername:match("[^\\]+$") or servername
-end
 
 ---@param start_time number
 ---@return string
@@ -64,24 +65,15 @@ local function format_status(entry)
   return "detached"
 end
 
----@param argf table?
+---@param entries table[]
 ---@return string
-local function format_argf(argf)
-  if not argf or type(argf) ~= "table" or #argf == 0 then
-    return ""
+local function row_fmt(entries)
+  local server_width = #"SERVER"
+  for _, entry in ipairs(entries) do
+    server_width = math.max(server_width, #(entry.servername or ""))
   end
-  local names = {}
-  for _, p in ipairs(argf) do
-    table.insert(names, vim.fn.fnamemodify(p, ":t"))
-  end
-  local joined = table.concat(names, " ")
-  if #joined > 26 then
-    joined = joined:sub(1, 23) .. "..."
-  end
-  return joined
+  return "%-18s  %-10s  %-5s  %-" .. server_width .. "s  %s"
 end
-
-local ROW_FMT = "  %s  %-18s  %-10s  %-20s  %-5s  %-18s  %s"
 
 ---@param s string
 ---@param w number
@@ -98,15 +90,16 @@ end
 ---@param width number
 ---@return string[]
 local function render(entries, width)
-  local header = string.format(ROW_FMT, " ", "NAME", "STATUS", "FILES", "T/B", "SERVER", "AGE")
+  local fmt = row_fmt(entries)
+  local header = string.format(fmt, "NAME", "STATUS", "T/B", "SERVER", "AGE")
   local lines = {
     pad(header, width),
-    "  " .. string.rep("─", math.max(0, width - 2)),
+    string.rep("─", width),
   }
   state.rows = {}
 
   if #entries == 0 then
-    table.insert(lines, pad("  (no instances)", width))
+    table.insert(lines, pad("(no instances)", width))
     return lines
   end
 
@@ -118,16 +111,10 @@ local function render(entries, width)
     local name = format_name(raw_name, 18)
 
     local status = format_status(entry)
-    local files = format_argf(entry.argf)
     local tabs_bufs = entry._meta and (entry._meta.tabs .. "/" .. entry._meta.bufs) or "?"
-    local tail = addr_tail(entry.servername or "")
-    if #tail > 18 then
-      tail = tail:sub(1, 15) .. "..."
-    end
+    local servername = entry.servername or ""
     local age = format_age(entry.start_time)
-    local icon = entry.has_ui and "●" or "○"
-
-    local row = string.format(ROW_FMT, icon, name, status, files, tabs_bufs, tail, age)
+    local row = string.format(fmt, name, status, tabs_bufs, servername, age)
     table.insert(lines, pad(row, width))
     state.rows[i + 2] = entry
   end
@@ -163,7 +150,7 @@ local function get_entry()
   return state.rows[row]
 end
 
----@param entry table
+---@param entry table?
 local function do_swap(entry)
   if not entry then
     return
@@ -175,7 +162,7 @@ local function do_swap(entry)
   vim.cmd(cmd)
 end
 
----@param entry table
+---@param entry table?
 local function do_kill(entry)
   if not entry then
     return
@@ -184,18 +171,60 @@ local function do_kill(entry)
   M.open()
 end
 
----@param entry table
+---@param entry table?
+local function do_detach(entry)
+  if not entry then
+    return
+  end
+  if entry.pid == vim.fn.getpid() then
+    close()
+    vim.cmd("detach")
+    return
+  end
+  if not rpc.detach(entry.servername) then
+    vim.notify("shunpo: could not request detach for " .. entry.servername, vim.log.levels.WARN)
+    return
+  end
+  vim.defer_fn(M.open, 100)
+end
+
+---@param entry table?
+local function do_detach_others(entry)
+  if not entry then
+    return
+  end
+  if entry.pid == vim.fn.getpid() then
+    vim.cmd("%detach")
+    return
+  end
+  if not rpc.detach_others(entry.servername) then
+    vim.notify("shunpo: could not request detach for " .. entry.servername, vim.log.levels.WARN)
+  end
+end
+
+---@param entry table?
 local function do_restart(entry)
   if not entry then
     return
   end
-  rpc.restart(entry.servername)
-  vim.defer_fn(function()
-    M.open()
-  end, 300)
+  local count = vim.v.count
+  if entry.pid == vim.fn.getpid() then
+    close()
+    if count >= 1 and count <= 8 then
+      vim.cmd("restart!")
+    elseif count == 9 then
+      vim.cmd("restart! +qall!")
+    else
+      vim.cmd("restart")
+    end
+    return
+  end
+  if not rpc.restart(entry.servername, count) then
+    vim.notify("shunpo: could not request restart for " .. entry.servername, vim.log.levels.WARN)
+  end
 end
 
----@param entry table
+---@param entry table?
 local function do_rename(entry)
   if not entry then
     return
@@ -225,8 +254,11 @@ local function set_keymaps(cfg)
   end, opts)
 
   vim.keymap.set("n", km.detach_self, function()
-    close()
-    vim.cmd("detach")
+    do_detach(get_entry())
+  end, opts)
+
+  vim.keymap.set("n", km.detach_others, function()
+    do_detach_others(get_entry())
   end, opts)
 
   vim.keymap.set("n", km.kill_remote, function()
@@ -254,10 +286,12 @@ end
 ---@return table[], number
 local function collect_entries(cfg)
   local self_pid = vim.fn.getpid()
-  local entries = registry.scan()
+  local entries = registry.scan(cfg.list.prune_on_open)
 
-  if cfg.list.prune_on_open then
-    entries = registry.prune(entries)
+  if not cfg.list.fetch_meta then
+    for _, entry in ipairs(entries) do
+      entry._meta = nil
+    end
   end
 
   if not cfg.list.include_self then
@@ -293,12 +327,6 @@ local function collect_entries(cfg)
     self_idx = 1
   end
 
-  if cfg.list.fetch_meta then
-    for _, entry in ipairs(entries) do
-      entry._meta = rpc.fetch_meta(entry.servername)
-    end
-  end
-
   return entries, (self_idx and 3) or nil
 end
 
@@ -321,14 +349,30 @@ local function write_buf(entries, self_row, width)
 end
 
 ---@param cfg ShunpoConfig
----@param line_count number
+---@param lines string[]
 ---@return table
-local function compute_dims(cfg, line_count)
+local function compute_dims(cfg, lines)
   local ui_list = vim.api.nvim_list_uis()
   local ui_info = ui_list[1] or { width = 80, height = 24 }
-  local width = math.max(math.floor(ui_info.width * cfg.window.width), 40)
-  local max_height = math.floor(ui_info.height * cfg.window.height)
-  local height = math.max(math.min(line_count, max_height), 3)
+  local max_width = math.max(ui_info.width - 4, 1)
+  local max_height = math.max(ui_info.height - 4, 1)
+  local rendered_width = 0
+  for _, line in ipairs(lines) do
+    rendered_width = math.max(rendered_width, vim.fn.strdisplaywidth(line))
+  end
+
+  local function resolve(value, fit, maximum, minimum)
+    if value == nil then
+      return math.max(math.min(fit, maximum), minimum)
+    end
+    if value > 0 and value <= 1 then
+      return math.max(math.min(math.floor(maximum * value), maximum), minimum)
+    end
+    return math.max(math.min(math.floor(value), maximum), minimum)
+  end
+
+  local width = resolve(cfg.window.width, rendered_width, max_width, math.min(40, max_width))
+  local height = resolve(cfg.window.height, #lines, max_height, math.min(3, max_height))
   return {
     relative = "editor",
     width = width,
@@ -336,6 +380,22 @@ local function compute_dims(cfg, line_count)
     row = math.floor((ui_info.height - height) / 2),
     col = math.floor((ui_info.width - width) / 2),
   }
+end
+
+local function constrain_cursor()
+  if not state.win or not vim.api.nvim_win_is_valid(state.win) or next(state.rows) == nil then
+    return
+  end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(state.win))
+  if state.rows[row] then
+    return
+  end
+  local first, last = math.huge, 0
+  for instance_row in pairs(state.rows) do
+    first = math.min(first, instance_row)
+    last = math.max(last, instance_row)
+  end
+  vim.api.nvim_win_set_cursor(state.win, { row < first and first or last, col })
 end
 
 ---Refresh contents in place. Recomputes size so resized terminals stay correct.
@@ -352,8 +412,11 @@ local function refresh(force)
   local cfg = config.get()
   local entries, self_row = collect_entries(cfg)
   local probe = render(entries, 1)
-  local dims = compute_dims(cfg, #probe)
+  local dims = compute_dims(cfg, probe)
 
+  -- Update the rows before changing float geometry. In particular, a removed
+  -- row can clamp the cursor; sizing after that avoids stale dimensions.
+  write_buf(entries, self_row, dims.width)
   vim.api.nvim_win_set_config(state.win, {
     relative = dims.relative,
     width = dims.width,
@@ -361,11 +424,11 @@ local function refresh(force)
     row = dims.row,
     col = dims.col,
   })
-
-  write_buf(entries, self_row, dims.width)
+  constrain_cursor()
 end
 
 function M.open()
+  registry.write_self()
   local cfg = config.get()
 
   if state.win and vim.api.nvim_win_is_valid(state.win) then
@@ -378,7 +441,7 @@ function M.open()
 
   local entries, self_row = collect_entries(cfg)
   local probe = render(entries, 1)
-  local dims = compute_dims(cfg, #probe)
+  local dims = compute_dims(cfg, probe)
 
   state.buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = state.buf })
@@ -408,6 +471,11 @@ function M.open()
     callback = function()
       refresh(true)
     end,
+  })
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    group = aug,
+    buffer = state.buf,
+    callback = constrain_cursor,
   })
 
   set_keymaps(cfg)

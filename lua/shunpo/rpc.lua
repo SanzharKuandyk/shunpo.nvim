@@ -12,17 +12,6 @@ local function close(ch)
   pcall(vim.fn.chanclose, ch)
 end
 
----@param entry table
----@return boolean
-function M.is_alive(entry)
-  local ch = connect(entry.servername)
-  if ch then
-    close(ch)
-    return true
-  end
-  return false
-end
-
 ---@param addr string
 ---@param ex_cmd table
 ---@return boolean
@@ -39,51 +28,40 @@ function M.remote_cmd(addr, ex_cmd)
 end
 
 ---@param addr string
----@return table?
-function M.fetch_meta(addr)
-  local ch = connect(addr)
-  if not ch then
-    return nil
-  end
-
-  local ok_tabs, tabs = pcall(vim.rpcrequest, ch, "nvim_list_tabpages")
-  local ok_bufs, bufs =
-    pcall(vim.rpcrequest, ch, "nvim_call_function", "getbufinfo", { { buflisted = 1 } })
-  local ok_cwd, cwd = pcall(vim.rpcrequest, ch, "nvim_call_function", "getcwd", { -1, -1 })
-
-  close(ch)
-
-  if ok_tabs and ok_bufs and ok_cwd then
-    return {
-      tabs = #tabs,
-      bufs = #bufs,
-      cwd = cwd,
-    }
-  end
-
-  return nil
-end
-
----@param addr string
-function M.detach(addr)
-  return M.remote_cmd(addr, { cmd = "detach" })
-end
-
----@param addr string
 ---@return boolean
-function M.restart(addr)
+function M.detach(addr)
   local ch = connect(addr)
   if not ch then
     return false
   end
-  -- Windows nvim can't reuse the same --listen address on :restart (pipe not
-  -- released in time). Hand off via old pid so the new process can adopt the
-  -- name from the prior registry file. See neovim#38539.
-  local code = [[
-    vim.env.SHUNPO_RESTART_FROM = tostring(vim.fn.getpid())
-    vim.cmd("restart")
-  ]]
-  local ok = pcall(vim.rpcnotify, ch, "nvim_exec_lua", code, {})
+  local ok = pcall(vim.rpcrequest, ch, "nvim_cmd", { cmd = "detach" }, {})
+  close(ch)
+  return ok
+end
+
+---@param addr string
+---@return boolean
+function M.detach_others(addr)
+  local ch = connect(addr)
+  if not ch then
+    return false
+  end
+  local ok = pcall(vim.rpcrequest, ch, "nvim_input", string.char(27) .. ":%detach\r")
+  close(ch)
+  return ok
+end
+
+---@param addr string
+---@param count integer? Passed through to Neovim's count-aware ZR command.
+---@return boolean
+function M.restart(addr, count)
+  local ch = connect(addr)
+  if not ch then
+    return false
+  end
+  -- pass [range]ZR
+  local keys = string.char(27) .. (count and count > 0 and tostring(count) or "") .. "ZR"
+  local ok = pcall(vim.rpcnotify, ch, "nvim_input", keys)
   close(ch)
   return ok
 end
